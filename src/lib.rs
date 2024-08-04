@@ -1,5 +1,8 @@
 use consts::RTX_TITAN_MAX_BUFFER_SIZE;
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+};
 use wgpu::util::DeviceExt;
 
 use data_utils::gigs_of_zeroed_f32s;
@@ -53,7 +56,7 @@ async fn execute_gpu_inner(
     // `usage` of buffer specifies how it can be used:
     //   `BufferUsages::MAP_READ` allows it to be read (outside the shader, by the CPU).
     //   `BufferUsages::COPY_DST` allows it to be the destination of a copy.
-    let staging_buffer = create_staging_buffers(device, input_size);
+    let staging_buffers = create_staging_buffers(device, input_size);
     log::debug!("Created staging_buffer");
 
     let storage_buffers = create_storage_buffers(device, numbers, input_size); // Instantiates buffer with data (`numbers`).
@@ -118,7 +121,7 @@ async fn execute_gpu_inner(
     // Will copy data from storage buffer on GPU to staging buffer on CPU.
     storage_buffers.into_iter().enumerate().for_each(|(e, sb)| {
         //FIXME: how do we set the offsets? e*size of sb?
-        encoder.copy_buffer_to_buffer(&sb, 0, &staging_buffer, 0, input_size);
+        encoder.copy_buffer_to_buffer(&sb, 0, &sb, 0, input_size / RTX_TITAN_MAX_BUFFER_SIZE);
     });
 
     log::debug!("buffers created, sending to GPU");
@@ -127,37 +130,46 @@ async fn execute_gpu_inner(
     queue.submit(Some(encoder.finish()));
 
     // Note that we're not calling `.await` here.
-    let buffer_slice = staging_buffer.slice(..);
+    let mut buffer_slices = Vec::new();
+    staging_buffers.iter().for_each(|sb| {
+        buffer_slices.push(sb.slice(..));
+    });
+
     // Sets the buffer up for mapping, sending over the result of the mapping back to us when it is finished.
-    let (sender, receiver) = flume::bounded(1);
-    buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+    let (sender, receiver) = flume::bounded(buffer_slices.len());
+    let sender = Arc::new(sender);
+
+    buffer_slices.iter().for_each(|bs| {
+        let sender = sender.clone();
+        bs.map_async(wgpu::MapMode::Read, move |v| {
+            sender.send(v).unwrap();
+        })
+    });
 
     // Poll the device in a blocking manner so that our future resolves.
-    // In an actual application, `device.poll(...)` should
-    // be called in an event loop or on another thread.
-    device.poll(wgpu::Maintain::wait()).panic_on_timeout();
+    device.poll(wgpu::Maintain::wait());
 
-    // Awaits until `buffer_future` can be read from
+    // Await buffer futures to read
     if let Ok(Ok(())) = receiver.recv_async().await {
         log::debug!("Getting results...");
-        // Gets contents of buffer
-        let data = buffer_slice.get_mapped_range();
-        // Since contents are got in bytes, this converts these bytes back to u32
-        let result = bytemuck::cast_slice(&data).to_vec();
+        // Retrieve and process buffer data
+        let data: Vec<f32> = buffer_slices
+            .iter()
+            .map(|bs| {
+                let data = bs.get_mapped_range();
+                let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
+                drop(data); // Drop to free buffer before unmap
+                result
+            })
+            .flatten()
+            .collect();
 
-        // With the current interface, we have to make sure all mapped views are
-        // dropped before we unmap the buffer.
-        drop(data);
-        staging_buffer.unmap(); // Unmaps buffer from memory
-                                // If you are familiar with C++ these 2 lines can be thought of similarly to:
-                                //   delete myPointer;
-                                //   myPointer = NULL;
-                                // It effectively frees the memory
+        // Since buffer_slices was not moved, we can still access it here
+        staging_buffers.iter().for_each(|sb| sb.unmap()); // Unmaps buffer from memory
 
-        // Returns data from buffer
-        Some(result)
+        Some(data) // Return the collected data
     } else {
-        log::error!("failed to run compute on gpu!");
+        log::error!("Failed to run compute on GPU!");
         None
     }
 }
@@ -187,7 +199,7 @@ fn create_storage_buffers(
     input_size: u64,
 ) -> Vec<wgpu::Buffer> {
     if input_size > RTX_TITAN_MAX_BUFFER_SIZE {
-        log::warn!("Supplied input is too large for a single buffer, splitting...");
+        log::warn!("Supplied input is too large for a single storage buffer, splitting...");
 
         numbers
             .chunks((input_size / RTX_TITAN_MAX_BUFFER_SIZE) as usize)
@@ -217,17 +229,22 @@ fn create_storage_buffers(
 
 fn create_staging_buffers(device: &wgpu::Device, input_size: u64) -> Vec<wgpu::Buffer> {
     if input_size > RTX_TITAN_MAX_BUFFER_SIZE {
-        log::warn!("Supplied input is too large for a single buffer, splitting...");
-        let num_chunks = (input_size / RTX_TITAN_MAX_BUFFER_SIZE) as usize;
-        (0..num_chunks)
+        log::warn!("Supplied input is too large for a single staging buffer, splitting...");
+        let num_chunks = input_size / RTX_TITAN_MAX_BUFFER_SIZE;
+
+        log::debug!("num_chunks: {}", num_chunks);
+        (0..num_chunks as usize)
             .into_iter()
             .map(|e| {
-                device.create_buffer(&wgpu::BufferDescriptor {
+                log::debug!("created buffer {} of {}", e + 1, num_chunks);
+                let b = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some(&format!("staging buffer-{}", e)),
-                    size: input_size,
+                    size: input_size / num_chunks,
                     usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
-                })
+                });
+
+                b
             })
             .collect()
     } else {
