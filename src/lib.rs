@@ -50,25 +50,16 @@ async fn execute_gpu_inner(
     let input_size = std::mem::size_of_val(numbers) as wgpu::BufferAddress;
     log::debug!("Size of input {}b", &input_size);
 
+    // ------------------------- BUFFERS -------------------------
     // Instantiates buffer without data.
     // `usage` of buffer specifies how it can be used:
     //   `BufferUsages::MAP_READ` allows it to be read (outside the shader, by the CPU).
     //   `BufferUsages::COPY_DST` allows it to be the destination of a copy.
-    let staging_buffers = create_staging_buffers(device, input_size);
+    let staging_buffers = create_staging_buffers(device, numbers);
     log::debug!("Created staging_buffer");
 
-    let storage_buffers = create_storage_buffers(device, numbers, input_size); // Instantiates buffer with data (`numbers`).
-                                                                               // Usage allowing the buffer to be:
-                                                                               //   A storage buffer (can be bound within a bind group and thus available to a shader).
-                                                                               //   The destination of a copy.
-                                                                               //   The source of a copy.
+    let storage_buffers = create_storage_buffers(device, numbers, input_size);
     log::debug!("Created storage_buffer");
-
-    // A bind group defines how buffers are accessed by shaders.
-    // It is to WebGPU what a descriptor set is to Vulkan.
-    // `binding` here refers to the `binding` of a buffer in the shader (`layout(set = 0, binding = 0) buffer`).
-
-    // A pipeline specifies the operation of a shader
 
     // Instantiates the pipeline.
     let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -80,24 +71,49 @@ async fn execute_gpu_inner(
         cache: None,
     });
 
-    // Instantiates the bind group, once again specifying the binding of buffers.
-    let bind_group_layout = compute_pipeline.get_bind_group_layout(0);
+    // ------------------------- BIND THE BUFFERS -------------------------
+    // A bind group defines how buffers are accessed by shaders.
 
-    let bind_groups: Vec<wgpu::BindGroup> = storage_buffers
+    let bind_group_entries: Vec<wgpu::BindGroupEntry> = storage_buffers
         .iter()
         .enumerate()
-        .map(|(index, buffer)| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("Bind Group {}", index)),
-                layout: &bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: index as u32, // Note: typically binding starts at 0 for each group
-                    resource: buffer.as_entire_binding(),
-                }],
-            })
+        .map(|(bind_idx, buffer)| {
+            log::debug!("{} buffer is {}b", bind_idx, buffer.size());
+
+            wgpu::BindGroupEntry {
+                binding: bind_idx as u32,             // Unique binding index for each buffer
+                resource: buffer.as_entire_binding(), // Reference to the buffer's entire range
+            }
         })
         .collect();
 
+    let bind_group_layout_entries: Vec<wgpu::BindGroupLayoutEntry> = (0..storage_buffers.len())
+        .map(|idx| wgpu::BindGroupLayoutEntry {
+            binding: idx as u32,
+            visibility: wgpu::ShaderStages::COMPUTE, // or whatever stages you need
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false }, // adjust based on your needs
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        })
+        .collect();
+
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Custom Storage Bind Group Layout"),
+        entries: &bind_group_layout_entries,
+    });
+
+    // Now create the bind group using this layout
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Combined Storage Bind Group"),
+        layout: &bind_group_layout,
+        entries: &bind_group_entries,
+    });
+    // Now `bind_group` contains a binding for each buffer in `storage_buffers`
+
+    // ------------------------- ENCODE -------------------------
     // A command encoder executes one or many pipelines.
     // It is to WebGPU what a command buffer is to Vulkan.
     let mut encoder =
@@ -108,10 +124,9 @@ async fn execute_gpu_inner(
             timestamp_writes: None,
         });
         cpass.set_pipeline(&compute_pipeline);
-        bind_groups
-            .into_iter()
-            .enumerate()
-            .for_each(|(e, bg)| cpass.set_bind_group(e as u32, &bg, &[]));
+        log::debug!("set_pipeline complete");
+        cpass.set_bind_group(0, &bind_group, &[]);
+        log::debug!("set_bind_group complete");
         cpass.insert_debug_marker("bump a gigabyte of floats of 0.0 all by 1.0");
         cpass.dispatch_workgroups(numbers.len() as u32, 1, 1); // Number of cells to run, the (x,y,z) size of item being processed
     }
@@ -126,7 +141,6 @@ async fn execute_gpu_inner(
         });
 
     log::debug!("buffers created, sending to GPU");
-    std::process::exit(0);
 
     // Submits command encoder for processing
     queue.submit(Some(encoder.finish()));
@@ -177,11 +191,16 @@ async fn execute_gpu_inner(
 }
 
 pub async fn run() {
-    let numbers = gigs_of_zeroed_f32s(1);
+    let numbers = gigs_of_zeroed_f32s(0.48);
 
     let steps = execute_gpu(&numbers).await.unwrap();
 
     dbg!(steps);
+}
+
+pub fn calculate_chunks(numbers: &[f32], max_buffer_size: u64) -> Vec<&[f32]> {
+    let max_elements_per_chunk = max_buffer_size as usize / std::mem::size_of::<f32>(); // Calculate max f32 elements per buffer
+    numbers.chunks(max_elements_per_chunk).collect()
 }
 
 fn create_storage_buffers(
@@ -192,21 +211,14 @@ fn create_storage_buffers(
     if input_size > RTX_TITAN_MAX_BUFFER_SIZE {
         log::warn!("Supplied input is too large for a single storage buffer, splitting...");
 
-        let elements_per_chunk = numbers.len() / (input_size / RTX_TITAN_MAX_BUFFER_SIZE) as usize;
+        let chunks = calculate_chunks(numbers, RTX_TITAN_MAX_BUFFER_SIZE);
 
-        let chunks = numbers.chunks(elements_per_chunk);
         chunks
+            .iter()
             .enumerate()
             .map(|(e, seg)| {
-                log::debug!(
-                    "creating buffer {} of {}",
-                    e + 1,
-                    (numbers.len() + elements_per_chunk - 1) / elements_per_chunk
-                );
+                log::debug!("creating buffer {} of {}", e + 1, chunks.len());
 
-                if e >= (numbers.len() + elements_per_chunk - 1) / elements_per_chunk {
-                    panic!();
-                }
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(&format!("Storage Buffer-{}", e)),
                     contents: bytemuck::cast_slice(seg),
@@ -229,32 +241,24 @@ fn create_storage_buffers(
     }
 }
 
-fn create_staging_buffers(device: &wgpu::Device, input_size: u64) -> Vec<wgpu::Buffer> {
-    if input_size > RTX_TITAN_MAX_BUFFER_SIZE {
-        log::warn!("Supplied input is too large for a single staging buffer, splitting...");
-        let num_chunks = input_size / RTX_TITAN_MAX_BUFFER_SIZE;
+fn create_staging_buffers(device: &wgpu::Device, numbers: &[f32]) -> Vec<wgpu::Buffer> {
+    log::warn!("Supplied input is too large for a single staging buffer, splitting...");
 
-        log::debug!("num_chunks: {}", num_chunks);
-        (0..num_chunks as usize)
-            .into_iter()
-            .map(|e| {
-                log::debug!("creating buffer {} of {}", e + 1, num_chunks);
-                let b = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(&format!("staging buffer-{}", e)),
-                    size: input_size / num_chunks,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
+    let chunks = calculate_chunks(numbers, RTX_TITAN_MAX_BUFFER_SIZE);
 
-                b
-            })
-            .collect()
-    } else {
-        vec![device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: input_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })]
-    }
+    log::debug!("num_chunks: {}", chunks.len());
+    (0..chunks.len())
+        .into_iter()
+        .map(|e| {
+            log::debug!("creating buffer {} of {}", e + 1, chunks.len());
+            let b = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("staging buffer-{}", e)),
+                size: std::mem::size_of_val(chunks[e]) as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+
+            b
+        })
+        .collect()
 }
