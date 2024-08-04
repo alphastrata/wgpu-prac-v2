@@ -1,4 +1,4 @@
-use wgpu_prac_v2::{data_utils::gigs_of_zeroed_f32s, debug_gpu_info, run};
+use wgpu_prac_v2::{data_utils::gigs_of_zeroed_f32s, run};
 
 pub fn main() {
     pretty_env_logger::init();
