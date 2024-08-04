@@ -1,14 +1,12 @@
 use consts::RTX_TITAN_MAX_BUFFER_SIZE;
-use std::{
-    borrow::Cow,
-    sync::{Arc, Mutex},
-};
+use std::{borrow::Cow, sync::Arc};
 use wgpu::util::DeviceExt;
 
-use data_utils::gigs_of_zeroed_f32s;
-
 pub mod consts;
+pub mod data_utils;
 pub mod debug_helpers;
+
+use data_utils::gigs_of_zeroed_f32s;
 
 pub async fn execute_gpu(numbers: &[f32]) -> Option<Vec<f32>> {
     // Instantiates instance of WebGPU
@@ -114,17 +112,21 @@ async fn execute_gpu_inner(
             .into_iter()
             .enumerate()
             .for_each(|(e, bg)| cpass.set_bind_group(e as u32, &bg, &[]));
-        cpass.insert_debug_marker("compute collatz iterations");
+        cpass.insert_debug_marker("bump a gigabyte of floats of 0.0 all by 1.0");
         cpass.dispatch_workgroups(numbers.len() as u32, 1, 1); // Number of cells to run, the (x,y,z) size of item being processed
     }
     // Sets adds copy operation to command encoder.
     // Will copy data from storage buffer on GPU to staging buffer on CPU.
-    storage_buffers.into_iter().enumerate().for_each(|(e, sb)| {
-        //FIXME: how do we set the offsets? e*size of sb?
-        encoder.copy_buffer_to_buffer(&sb, 0, &sb, 0, input_size / RTX_TITAN_MAX_BUFFER_SIZE);
-    });
+    storage_buffers
+        .into_iter()
+        .enumerate()
+        .for_each(|(_e, sb)| {
+            //FIXME: how do we set the offsets? e*size of sb?
+            encoder.copy_buffer_to_buffer(&sb, 0, &sb, 0, input_size / RTX_TITAN_MAX_BUFFER_SIZE);
+        });
 
     log::debug!("buffers created, sending to GPU");
+    std::process::exit(0);
 
     // Submits command encoder for processing
     queue.submit(Some(encoder.finish()));
@@ -182,29 +184,29 @@ pub async fn run() {
     dbg!(steps);
 }
 
-pub mod data_utils {
-
-    pub fn gigs_of_zeroed_f32s(n: usize) -> Vec<f32> {
-        let bytes_per_gb = 1024 * 1024 * 1024; // 1 GB in bytes
-        let bytes_per_f32 = std::mem::size_of::<f32>(); // Size of f32 in bytes
-        let elements = n * bytes_per_gb / bytes_per_f32;
-
-        vec![0.0; elements]
-    }
-}
-
 fn create_storage_buffers(
     device: &wgpu::Device,
     numbers: &[f32],
-    input_size: u64,
+    input_size: u64, // bytes..
 ) -> Vec<wgpu::Buffer> {
     if input_size > RTX_TITAN_MAX_BUFFER_SIZE {
         log::warn!("Supplied input is too large for a single storage buffer, splitting...");
 
-        numbers
-            .chunks((input_size / RTX_TITAN_MAX_BUFFER_SIZE) as usize)
+        let elements_per_chunk = numbers.len() / (input_size / RTX_TITAN_MAX_BUFFER_SIZE) as usize;
+
+        let chunks = numbers.chunks(elements_per_chunk);
+        chunks
             .enumerate()
             .map(|(e, seg)| {
+                log::debug!(
+                    "creating buffer {} of {}",
+                    e + 1,
+                    (numbers.len() + elements_per_chunk - 1) / elements_per_chunk
+                );
+
+                if e >= (numbers.len() + elements_per_chunk - 1) / elements_per_chunk {
+                    panic!();
+                }
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(&format!("Storage Buffer-{}", e)),
                     contents: bytemuck::cast_slice(seg),
@@ -236,7 +238,7 @@ fn create_staging_buffers(device: &wgpu::Device, input_size: u64) -> Vec<wgpu::B
         (0..num_chunks as usize)
             .into_iter()
             .map(|e| {
-                log::debug!("created buffer {} of {}", e + 1, num_chunks);
+                log::debug!("creating buffer {} of {}", e + 1, num_chunks);
                 let b = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some(&format!("staging buffer-{}", e)),
                     size: input_size / num_chunks,
