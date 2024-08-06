@@ -8,6 +8,8 @@ pub mod debug_helpers;
 
 use data_utils::gigs_of_zeroed_f32s;
 
+const MAX_DISPATCH_SIZE: u32 = 65535;
+
 pub async fn execute_gpu(numbers: &[f32]) -> Option<Vec<f32>> {
     // Instantiates instance of WebGPU
     let instance = wgpu::Instance::default();
@@ -61,16 +63,6 @@ async fn execute_gpu_inner(
     let storage_buffers = create_storage_buffers(device, numbers, input_size);
     log::debug!("Created storage_buffer");
 
-    // Instantiates the pipeline.
-    let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: None,
-        layout: None,
-        module: &cs_module,
-        entry_point: "main",
-        compilation_options: Default::default(),
-        cache: None,
-    });
-
     // ------------------------- BIND THE BUFFERS -------------------------
     // A bind group defines how buffers are accessed by shaders.
 
@@ -111,6 +103,24 @@ async fn execute_gpu_inner(
         layout: &bind_group_layout,
         entries: &bind_group_entries,
     });
+
+    // Create the pipeline layout first
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Compute Pipeline Layout"),
+        bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    // Then, use this layout in your compute pipeline
+    let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Compute Pipeline"),
+        layout: Some(&pipeline_layout),
+        module: &cs_module,
+        entry_point: "main",
+        compilation_options: Default::default(),
+        cache: None,
+    });
+
     // Now `bind_group` contains a binding for each buffer in `storage_buffers`
 
     // ------------------------- ENCODE -------------------------
@@ -128,17 +138,30 @@ async fn execute_gpu_inner(
         cpass.set_bind_group(0, &bind_group, &[]);
         log::debug!("set_bind_group complete");
         cpass.insert_debug_marker("bump a gigabyte of floats of 0.0 all by 1.0");
-        cpass.dispatch_workgroups(numbers.len() as u32, 1, 1); // Number of cells to run, the (x,y,z) size of item being processed
+        cpass.dispatch_workgroups(MAX_DISPATCH_SIZE.min(numbers.len() as u32), 1, 1);
+        // Number of cells to run, the (x,y,z) size of item being processed
     }
-    // Sets adds copy operation to command encoder.
-    // Will copy data from storage buffer on GPU to staging buffer on CPU.
-    storage_buffers
-        .into_iter()
-        .enumerate()
-        .for_each(|(_e, sb)| {
-            //FIXME: how do we set the offsets? e*size of sb?
-            encoder.copy_buffer_to_buffer(&sb, 0, &sb, 0, input_size / RTX_TITAN_MAX_BUFFER_SIZE);
-        });
+
+    // Assuming `storage_buffers` and `destination_buffers` are Vec<wgpu::Buffer> and have the same length
+    for (storage_buffer, staging_buffer) in storage_buffers.iter().zip(staging_buffers.iter()) {
+        let sb_size = storage_buffer.size();
+        let stg_size = staging_buffer.size();
+
+        log::debug!("storage_buffer:{}, staging_buffer:{}", sb_size, stg_size);
+        assert!(
+            (sb_size % wgpu::COPY_BUFFER_ALIGNMENT == 0
+                && sb_size % wgpu::COPY_BUFFER_ALIGNMENT == 0)
+        );
+        assert_eq!(sb_size, stg_size);
+
+        encoder.copy_buffer_to_buffer(
+            storage_buffer, // Source buffer
+            0,              // Source offset
+            staging_buffer, // Destination buffer
+            0,              // Destination offset
+            stg_size,
+        );
+    }
 
     log::debug!("buffers created, sending to GPU");
 
@@ -193,9 +216,14 @@ async fn execute_gpu_inner(
 pub async fn run() {
     let numbers = gigs_of_zeroed_f32s(0.48);
 
-    let steps = execute_gpu(&numbers).await.unwrap();
+    let t1 = std::time::Instant::now();
+    let steps: Vec<f32> = execute_gpu(&numbers).await.unwrap();
+    log::debug!(">RUNTIME: {}ms", t1.elapsed().as_millis());
 
-    dbg!(steps);
+    dbg!(steps.len());
+
+    assert_eq!(numbers.len(), steps.len());
+    // assert!(steps.iter().all(|v| *v == 1.0));
 }
 
 pub fn calculate_chunks(numbers: &[f32], max_buffer_size: u64) -> Vec<&[f32]> {
@@ -218,6 +246,9 @@ fn create_storage_buffers(
             .enumerate()
             .map(|(e, seg)| {
                 log::debug!("creating buffer {} of {}", e + 1, chunks.len());
+
+                let size = std::mem::size_of_val(seg) as u64;
+                assert!(size % wgpu::COPY_BUFFER_ALIGNMENT == 0);
 
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(&format!("Storage Buffer-{}", e)),
@@ -250,10 +281,12 @@ fn create_staging_buffers(device: &wgpu::Device, numbers: &[f32]) -> Vec<wgpu::B
     (0..chunks.len())
         .into_iter()
         .map(|e| {
+            let size = std::mem::size_of_val(chunks[e]) as u64;
+            assert!(size % wgpu::COPY_BUFFER_ALIGNMENT == 0);
             log::debug!("creating buffer {} of {}", e + 1, chunks.len());
             let b = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(&format!("staging buffer-{}", e)),
-                size: std::mem::size_of_val(chunks[e]) as u64,
+                size,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
