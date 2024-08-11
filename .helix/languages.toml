@@ -1,0 +1,8 @@
+[[language]]
+name = "wgsl"
+scope = "source.wgsl"
+file-types = ["wgsl"]
+comment-token = "//"
+block-comment-tokens = { start = "/*", end = "*/" }
+language-servers = [ "glasgow" ]
+indent = { tab-width = 4, unit = "    " }
