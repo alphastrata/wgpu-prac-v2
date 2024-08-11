@@ -10,7 +10,7 @@ pub fn main() {
     //     std::mem::size_of::<f32>() * floats.len()
     // );
 
-    // pollster::block_on(wgpu_prac_v2::debug_helpers::debug_gpu_info());
+    pollster::block_on(wgpu_prac_v2::debug_helpers::debug_gpu_info());
 
     pollster::block_on(run());
 }

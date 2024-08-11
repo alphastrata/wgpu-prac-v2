@@ -245,6 +245,7 @@ fn setup_binds(
 
 pub async fn run() {
     let numbers = gigs_of_zeroed_f32s(0.48);
+    // let numbers = gigs_of_zeroed_f32s(0.99);
 
     assert!(numbers.iter().all(|n| *n == 0.0));
     log::debug!("numbers.len() = {}", numbers.len());
@@ -256,26 +257,56 @@ pub async fn run() {
     assert_eq!(numbers.len(), results.len());
 
     /*  NOTES:
-    arrayLength(v_indicies) =  33,554,432 // GPU side
-    according numbers.len() = 128,849,016 // CPU side
+    So our 48% of 1GB worth of floats makes an array of f32 of length according to :
+        numbers.len() = 128,849,016           // CPU side, which is correct
+        arrayLength(v_indicies) =  33,554,432 // GPU side, which is NOT correct.
 
-    Perhapes more unusually, we strike out with 0s long long before that 33.5 million:
+    Perhaps more unusually, we strike out with 0s long long before that 33.5 million:
         idx: 4,194,239= val:1
         idx: 4,194,240= val:0 (we should be 1.0 up until 33.5 million...)
         So this seems to be that the global_id.x never gets high enough
 
-    which is exactly right for 1/4th of our bindings
-
-
+    which is exactly right for 1/4th of our bindings.
     Our global_id.x maxes out at = 4,194,239, which is starting to look familiar
+
+    If we add a const OFFSET of that 4_194_239 and try to do the add_one calls at evenly,
+    strode segments of the array we get 1.0s up to:
+        idx: 16,776,960, val:0.0
+    which is ~4x what we had before so that makes sense, but we're still a long way from
+    incrementing all the way up to 33.5 million, let alone 128.8 million.
+
+    What happens if we just keep adding more at the stride * 'n' ?
+
+    weirdly adding these you'd think may take us further, but it does not, we still tap out at=16_776_960:
+        v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 4u]);
+        v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 5u]);
+        v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 6u]);
+        v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 7u]);
+
+    So what gives? is this ACTUALLY the size limit on our buffer?
+
+    What happens if we go from the 0.48 to 0.99 in our gigs_of_zeroed_f32s, and keep the above, will there be more buffer for us to write to?
+        ERROR wgpu::backend::wgpu_core > Handling wgpu errors as fatal by default
+        thread 'main' panicked at /home/jer/.cargo/registry/src/index.crates.io-6f17d22bba15001f/wgpu-22.1.0/src/backend/wgpu_core.rs:3411:5:
+        wgpu error: Validation Error
+
+        Caused by:
+          In Device::create_bind_group_layout, label = 'Custom Storage Bind Group Layout'
+            Too many bindings of type StorageBuffers in Stage ShaderStages(COMPUTE), limit is 4, count was 8. Check the limit `max_storage_buffers_per_shader_stage` passed to `Adapter::request_device`
+
+    Ok so < 1/2 a GB is the max, which is weird because our wgpu::Limits report:
+         {...,  "max_storage_buffer_binding_size": 2147483648, ... } // 2.147GB
+
+
+    Well regardless, we'll have to refactor the binding part again to accomodate a max of 4 bindings per group, so if our data is bigger than those 4 bindings can hold, we'll need additional groups too :(
+
+
+
     */
     results.iter().enumerate().for_each(|(e, v)| {
         if *v == 0.0 {
-            // println!("idx: {}, val:{:#?}", e, v);
-        } else {
-            // Let's not print the whole time we'll be here for ever!
             println!("idx: {}, val:{:#?}", e, v);
-            // panic!()
+            panic!()
         }
     });
 

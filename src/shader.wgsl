@@ -7,7 +7,7 @@ fn add_one(n: f32) -> f32 {
 }
 
 
-var OFFSET:u32 = 4194240;
+const OFFSET:u32 = 4194240;
 
 @compute
 @workgroup_size(64)
@@ -21,9 +21,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Base index using global_id.x
     v_indices[global_id.x] = add_one(v_indices[global_id.x]);
+    v_indices[global_id.x + OFFSET] = add_one(v_indices[global_id.x + OFFSET]);
+    v_indices[global_id.x + OFFSET * 2u] = add_one(v_indices[global_id.x + OFFSET * 2u]);
+    v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 3u]);
+    // up to here takes us up to 16.7 million
 
-    // Increment using offsets
-    v_indices[global_id.x + offset] = add_one(v_indices[global_id.x + offset]);
-    v_indices[global_id.x + offset * 2u] = add_one(v_indices[global_id.x + offset * 2u]);
-    v_indices[global_id.x + offset * 3u] = add_one(v_indices[global_id.x + offset * 3u]);
+    
+    // adding these you'd think may take us further, but it does not, we still tap out at 
+    // 16_776_960
+    // v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 4u]);
+    // v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 5u]);
+    // v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 6u]);
+    // v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 7u]);
 }
