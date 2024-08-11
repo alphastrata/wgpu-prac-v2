@@ -255,25 +255,27 @@ pub async fn run() {
 
     assert_eq!(numbers.len(), results.len());
 
-    //FIXME:
-
     /*  NOTES:
-    arrayLength(v_indicies) according to the gpu =  33,554,432
-    according to us                              = 128,849,016
+    arrayLength(v_indicies) =  33,554,432 // GPU side
+    according numbers.len() = 128,849,016 // CPU side
 
-    Perhapes more conceriningly, we strike out with 0s long long before that 33.5 million:
+    Perhapes more unusually, we strike out with 0s long long before that 33.5 million:
         idx: 4,194,239= val:1
         idx: 4,194,240= val:0 (we should be 1.0 up until 33.5 million...)
         So this seems to be that the global_id.x never gets high enough
 
     which is exactly right for 1/4th of our bindings
+
+
+    Our global_id.x maxes out at = 4,194,239, which is starting to look familiar
     */
     results.iter().enumerate().for_each(|(e, v)| {
         if *v == 0.0 {
-            println!("idx: {}, val:{:#?}", e, v);
-            panic!()
-        } else {
             // println!("idx: {}, val:{:#?}", e, v);
+        } else {
+            // Let's not print the whole time we'll be here for ever!
+            println!("idx: {}, val:{:#?}", e, v);
+            // panic!()
         }
     });
 
