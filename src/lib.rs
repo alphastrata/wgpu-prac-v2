@@ -1,6 +1,6 @@
-use consts::RTX_TITAN_MAX_BUFFER_SIZE;
+use consts::{MAX_DISPATCH_SIZE, RTX_TITAN_MAX_BUFFER_SIZE};
 use std::{borrow::Cow, sync::Arc};
-use wgpu::util::DeviceExt;
+use wgpu::{util::DeviceExt, Features};
 
 pub mod consts;
 pub mod data_utils;
@@ -8,26 +8,25 @@ pub mod debug_helpers;
 
 use data_utils::gigs_of_zeroed_f32s;
 
-const MAX_DISPATCH_SIZE: u32 = 65535;
-
 pub async fn execute_gpu(numbers: &[f32]) -> Option<Vec<f32>> {
-    // Instantiates instance of WebGPU
     let instance = wgpu::Instance::default();
 
-    // `request_adapter` instantiates the general connection to the GPU
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
         .await?;
 
-    // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
-    //  `features` being the available features.
     let (device, queue) = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                // What features can we add?
+                required_features: Features::STORAGE_RESOURCE_BINDING_ARRAY
+                    | Features::BUFFER_BINDING_ARRAY
+                    | Features::MAPPABLE_PRIMARY_BUFFERS,
+                // What limits can we uplevel to?
+                // required_limits: wgpu::Limits::downlevel_defaults(),
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
+                ..Default::default()
             },
             None,
         )
@@ -51,8 +50,8 @@ async fn execute_gpu_inner(
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: None,
-            timestamp_writes: None,
+            label: Some("compute pass descriptor"),
+            timestamp_writes: None, // We can use this with ComputePassTimestampWrites, let's find out how
         });
         cpass.set_pipeline(&compute_pipeline);
         log::debug!("set_pipeline complete");
@@ -168,6 +167,7 @@ fn setup(
 
     // ------------------------- BIND THE BUFFERS -------------------------
     // A bind group defines how buffers are accessed by shaders.
+    //TODO: it's quite possible for the 'work' to NOT fit into a single 4 binds available to each one of our 0..n 'groups' so, this needs a refactor
     let (bind_group_layout, bind_group) = setup_binds(&storage_buffers, device);
 
     let compute_pipeline = setup_pipeline(device, bind_group_layout, cs_module);
@@ -209,7 +209,7 @@ fn setup_binds(
         .iter()
         .enumerate()
         .map(|(bind_idx, buffer)| {
-            log::debug!("{} buffer is {}b", bind_idx, buffer.size());
+            log::debug!("bind_idx:{} buffer is {}b", bind_idx, buffer.size());
             wgpu::BindGroupEntry {
                 binding: bind_idx as u32,
                 resource: buffer.as_entire_binding(),
@@ -218,8 +218,8 @@ fn setup_binds(
         .collect();
 
     let bind_group_layout_entries: Vec<wgpu::BindGroupLayoutEntry> = (0..storage_buffers.len())
-        .map(|idx| wgpu::BindGroupLayoutEntry {
-            binding: idx as u32,
+        .map(|bind_idx| wgpu::BindGroupLayoutEntry {
+            binding: bind_idx as u32,
             visibility: wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -229,6 +229,12 @@ fn setup_binds(
             count: None,
         })
         .collect();
+
+    log::debug!(
+        "created {} BindGroupEntries with {} corresponding BindGroupEntryLayouts.",
+        bind_group_entries.len(),
+        bind_group_layout_entries.len()
+    );
 
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Custom Storage Bind Group Layout"),
@@ -301,16 +307,61 @@ pub async fn run() {
     Well regardless, we'll have to refactor the binding part again to accomodate a max of 4 bindings per group, so if our data is bigger than those 4 bindings can hold, we'll need additional groups too :(
 
 
+    Maybe it's time to reach out to chris? Reach out: chris@fleetwood.dev
+
+
 
     */
     results.iter().enumerate().for_each(|(e, v)| {
-        if *v == 0.0 {
-            println!("idx: {}, val:{:#?}", e, v);
+        if *v == 1.0 {
+            // Add this check to avoid underflow when e is 0
+
+            println!(
+                "Pre Panic @ idx-2: {}, val: {}",
+                format_large_number((e - 2) as u32),
+                format_large_number(results[e - 2] as u32)
+            );
+
+            println!(
+                "Pre Panic @ idx-1: {}, val: {}",
+                format_large_number((e - 1) as u32),
+                format_large_number(results[e - 1] as u32)
+            );
+            println!(
+                "Panic     @ idx  : {}, val: {}",
+                format_large_number(e as u32),
+                format_large_number(*v as u32)
+            );
             panic!()
         }
     });
-
     assert!(results.iter().all(|n| *n == 1.0));
+}
+
+fn format_large_number(num: u32) -> String {
+    let num_str = num.to_string();
+    let num_digits = num_str.len();
+
+    if num_digits <= 3 {
+        return num_str;
+    }
+
+    // Calculate the number of underscores to be added
+    let num_underscores = (num_digits - 1) / 3;
+
+    // Precalculate the capacity
+    let capacity = num_digits + num_underscores;
+
+    let mut result = String::with_capacity(capacity);
+
+    for (i, c) in num_str.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push('_');
+        }
+        result.push(c);
+    }
+
+    result.chars().rev().collect()
 }
 
 pub fn calculate_chunks(numbers: &[f32], max_buffer_size: u64) -> Vec<&[f32]> {
@@ -332,7 +383,7 @@ fn create_storage_buffers(
             .iter()
             .enumerate()
             .map(|(e, seg)| {
-                log::debug!("creating storage buffer {} of {}", e + 1, chunks.len());
+                log::debug!("creating Storage Buffer {} of {}", e + 1, chunks.len());
 
                 let size = std::mem::size_of_val(seg) as u64;
                 assert!(size % wgpu::COPY_BUFFER_ALIGNMENT == 0);
