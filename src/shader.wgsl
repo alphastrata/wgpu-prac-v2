@@ -1,75 +1,32 @@
-// @group(0)
-// @binding(0)
-// var<storage, read_write> v_indices: array<f32>;
-
 @group(0)
 @binding(0)
-var<storage, read_write> buffers: array<Buffer, 4>;
+var<storage, read_write> flat_buffer: array<f32>;
 
-struct Buffer{
-    inner: array<f32>
-}
-
+// Function to add one to a given value
 fn add_one(n: f32) -> f32 {
     return n + 1.0;
 }
 
-const OFFSET: u32 = 256;
-
-// fn get_element(index: u32) -> f32 {
-//     let buffer_size = arrayLength(&buffers[0]);
-//     let buffer_index = index / buffer_size;  // Determine which buffer to use
-//     let local_index = index % buffer_size;   // Determine the index within that buffer
-//     return buffers[buffer_index][local_index];
-// }
-
-// fn set_element(index: u32, value: f32) {
-//     let buffer_size = arrayLength(&buffers[0]);
-//     let buffer_index = index / buffer_size;
-//     let local_index = index % buffer_size;
-//     buffers[buffer_index][local_index] = value;
-// }
+const OFFSET:u32 = 1024;
 
 @compute
 @workgroup_size(256, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let base_index = global_id.x * OFFSET;
+    let len = arrayLength(&flat_buffer);
 
+
+// working on one-buffer
     // Loop over the OFFSET indices that this thread is responsible for
     for (var i = 0u; i < OFFSET; i++) {
         let index = base_index + i;
         
-        // Access and modify the element across the contiguous buffer
-        // let value = get_element(index);
-        // set_element(index, add_one(value));
+        if (index < arrayLength(&flat_buffer)) {
+            // flat_buffer[index] = add_one(flat_buffer[index]);
+            flat_buffer[index] = f32(len);
+        }
     }
 }
-
-
-
-
-
-
-
-
-
-
-// const OFFSET:u32 = 256;
-
-// @compute
-// @workgroup_size(256, 1, 1)
-// fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-//     let base_index = global_id.x * OFFSET;
-
-//     // Loop over the OFFSET indices that this thread is responsible for
-//     for (var i = 0u; i < OFFSET; i++) {
-//         let index = base_index + i;
-        
-//         if (index < arrayLength(&v_indices)) {
-//             v_indices[index] = add_one(v_indices[index]);
-//         }
-//     }
-// }
 
 
 // const OFFSET:u32 = 4194240;

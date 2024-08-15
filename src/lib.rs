@@ -313,9 +313,8 @@ pub async fn run() {
 
     */
     results.iter().enumerate().for_each(|(e, v)| {
-        if *v == 1.0 {
+        if *v == 0.0 {
             // Add this check to avoid underflow when e is 0
-
             println!(
                 "Pre Panic @ idx-2: {}, val: {}",
                 format_large_number((e - 2) as u32),
