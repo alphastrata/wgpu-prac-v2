@@ -66,10 +66,7 @@ async fn execute_gpu_inner(
             let sb_size = storage_buffer.size();
             let stg_size = staging_buffer.size();
 
-            assert!(
-                (sb_size % wgpu::COPY_BUFFER_ALIGNMENT == 0
-                    && sb_size % wgpu::COPY_BUFFER_ALIGNMENT == 0)
-            );
+            assert!(sb_size % wgpu::COPY_BUFFER_ALIGNMENT == 0);
             assert_eq!(sb_size, stg_size);
 
             encoder.copy_buffer_to_buffer(
@@ -328,7 +325,7 @@ fn create_storage_buffers(
             .map(|(e, seg)| {
                 log::debug!("creating Storage Buffer {} of {}", e + 1, chunks.len());
 
-                let size = std::mem::size_of_val(seg) as u64;
+                let size = std::mem::size_of_val(*seg) as u64;
                 assert!(size % wgpu::COPY_BUFFER_ALIGNMENT == 0);
 
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
