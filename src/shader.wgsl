@@ -2,6 +2,14 @@
 @binding(0)
 var<storage, read_write> flat_buffer: array<f32>;
 
+
+struct MyBuffer{
+    inner: array<f32>,
+}
+
+var<storage, read_write> buffer_array: array<MyBuffer, 10>;
+
+
 // Function to add one to a given value
 fn add_one(n: f32) -> f32 {
     return n + 1.0;
