@@ -20,8 +20,10 @@ pub async fn execute_gpu(numbers: &[f32]) -> Option<Vec<f32>> {
             &wgpu::DeviceDescriptor {
                 label: None,
                 required_features: 
-                Features::default(),              
-                memory_hints: wgpu::MemoryHints::Performance,
+                // Features::default(),              
+                Features::STORAGE_RESOURCE_BINDING_ARRAY|
+                Features::BUFFER_BINDING_ARRAY,
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
                 ..Default::default()
             },
             None,
@@ -59,10 +61,8 @@ async fn execute_gpu_inner(
     }
 
     // Assuming `storage_buffers` and `destination_buffers` are Vec<wgpu::Buffer> and have the same length
-    storage_buffers
-        .iter()
-        .zip(staging_buffers.iter())
-        .for_each(|(storage_buffer, staging_buffer)| {
+    storage_buffers.iter().zip(staging_buffers.iter()).for_each(
+        |(storage_buffer, staging_buffer)| {
             let sb_size = storage_buffer.size();
             let stg_size = staging_buffer.size();
 
@@ -76,7 +76,8 @@ async fn execute_gpu_inner(
                 0,              // Destination offset
                 stg_size,
             );
-        });
+        },
+    );
 
     log::debug!("buffers created, submitting job to GPU");
 
@@ -143,7 +144,7 @@ fn setup(
 
     // Gets the size in bytes of the buffer.
     let input_size = std::mem::size_of_val(numbers) as wgpu::BufferAddress;
-    log::debug!("Size of input {}b", &input_size);
+    log::debug!("Size of input {}b", format_large_number(&input_size));
 
     // ------------------------- BUFFERS -------------------------
     // Instantiates buffer without data.
@@ -181,7 +182,6 @@ fn setup_pipeline(
         push_constant_ranges: &[],
     });
 
-    
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Compute Pipeline"),
         layout: Some(&pipeline_layout),
@@ -200,7 +200,11 @@ fn setup_binds(
         .iter()
         .enumerate()
         .map(|(bind_idx, buffer)| {
-            log::debug!("bind_idx:{} buffer is {}b", bind_idx, buffer.size());
+            log::debug!(
+                "bind_idx:{} buffer is {}b",
+                bind_idx,
+                format_large_number(buffer.size())
+            );
             wgpu::BindGroupEntry {
                 binding: bind_idx as u32,
                 resource: buffer.as_entire_binding(),
@@ -242,14 +246,14 @@ fn setup_binds(
 
 pub async fn run() {
     let numbers = gigs_of_zeroed_f32s(0.50);
-    // let numbers = gigs_of_zeroed_f32s(0.99);
+    // let numbers = gigs_of_zeroed_f32s(1.0);
 
     assert!(numbers.iter().all(|n| *n == 0.0));
-    log::debug!("numbers.len() = {}", numbers.len());
+    log::debug!("numbers.len() = {}", format_large_number(numbers.len()));
 
     let t1 = std::time::Instant::now();
     let results = execute_gpu(&numbers).await.unwrap();
-    log::debug!("RUNTIME: {}ms", t1.elapsed().as_millis());
+    log::debug!("TOTAL RUNTIME: {}ms", t1.elapsed().as_millis());
 
     assert_eq!(numbers.len(), results.len());
 
@@ -258,19 +262,19 @@ pub async fn run() {
             // Add this check to avoid underflow when e is 0
             println!(
                 "Pre Panic @ idx-2: {}, val: {}",
-                format_large_number((e - 2) as u32),
-                format_large_number(results[e - 2] as u32)
+                format_large_number(e - 2),
+                format_large_number(results[e - 2])
             );
 
             println!(
                 "Pre Panic @ idx-1: {}, val: {}",
-                format_large_number((e - 1) as u32),
-                format_large_number(results[e - 1] as u32)
+                format_large_number(e - 1),
+                format_large_number(results[e - 1])
             );
             println!(
                 "Panic     @ idx  : {}, val: {}",
-                format_large_number(e as u32),
-                format_large_number(*v as u32)
+                format_large_number(e),
+                format_large_number(*v)
             );
             panic!()
         }
@@ -278,7 +282,7 @@ pub async fn run() {
     assert!(results.iter().all(|n| *n == 1.0));
 }
 
-fn format_large_number(num: u32) -> String {
+fn format_large_number<N: ToString>(num: N) -> String {
     let num_str = num.to_string();
     let num_digits = num_str.len();
 
@@ -286,10 +290,8 @@ fn format_large_number(num: u32) -> String {
         return num_str;
     }
 
-    // Calculate the number of underscores to be added
     let num_underscores = (num_digits - 1) / 3;
 
-    // Precalculate the capacity
     let capacity = num_digits + num_underscores;
 
     let mut result = String::with_capacity(capacity);
@@ -361,7 +363,6 @@ fn create_staging_buffers(device: &wgpu::Device, numbers: &[f32]) -> Vec<wgpu::B
             let size = std::mem::size_of_val(chunks[e]) as u64;
             assert!(size % wgpu::COPY_BUFFER_ALIGNMENT == 0);
             log::debug!("creating staging buffer {} of {}", e + 1, chunks.len());
-            
 
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(&format!("staging buffer-{}", e)),
