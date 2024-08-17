@@ -477,7 +477,7 @@ pub async fn run() {
 
     let t1 = std::time::Instant::now();
     let results = execute_gpu(&numbers).await.unwrap();
-    log::debug!(">RUNTIME: {}ms", t1.elapsed().as_millis());
+    log::debug!("GPU RUN: {}ms", t1.elapsed().as_millis());
 
     assert_eq!(numbers.len(), results.len());
 

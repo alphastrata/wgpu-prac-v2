@@ -1,4 +1,5 @@
 use consts::{MAX_DISPATCH_SIZE, RTX_TITAN_MAX_BUFFER_SIZE};
+use debug_helpers::run_cpu_sanity_check;
 use std::{borrow::Cow, sync::Arc};
 use wgpu::{util::DeviceExt, Features};
 
@@ -19,10 +20,8 @@ pub async fn execute_gpu(numbers: &[f32]) -> Option<Vec<f32>> {
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
-                required_features: 
-                // Features::default(),              
-                Features::STORAGE_RESOURCE_BINDING_ARRAY|
-                Features::BUFFER_BINDING_ARRAY,
+                required_features: Features::STORAGE_RESOURCE_BINDING_ARRAY
+                    | Features::BUFFER_BINDING_ARRAY,
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
                 ..Default::default()
             },
@@ -136,7 +135,6 @@ fn setup(
     wgpu::BindGroup,
     wgpu::ComputePipeline,
 ) {
-    // Loads the shader from WGSL
     let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
@@ -245,8 +243,8 @@ fn setup_binds(
 }
 
 pub async fn run() {
-    let numbers = gigs_of_zeroed_f32s(0.50);
-    // let numbers = gigs_of_zeroed_f32s(1.0);
+    // let numbers = gigs_of_zeroed_f32s(0.50);
+    let numbers = gigs_of_zeroed_f32s(1.0);
 
     assert!(numbers.iter().all(|n| *n == 0.0));
     log::debug!("numbers.len() = {}", format_large_number(numbers.len()));
@@ -280,6 +278,9 @@ pub async fn run() {
         }
     });
     assert!(results.iter().all(|n| *n == 1.0));
+
+    let results2 = run_cpu_sanity_check(&numbers);
+    assert!(results2.iter().all(|n| *n == 1.0));
 }
 
 fn format_large_number<N: ToString>(num: N) -> String {

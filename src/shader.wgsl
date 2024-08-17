@@ -11,6 +11,21 @@ var<storage, read_write> flat_buffer2: array<f32>;
 @binding(3)
 var<storage, read_write> flat_buffer3: array<f32>;
 
+
+@group(0)
+@binding(4)
+var<storage, read_write> flat_buffer4: array<f32>;
+@group(0)
+@binding(5)
+var<storage, read_write> flat_buffer5: array<f32>;
+@group(0)
+@binding(6)
+var<storage, read_write> flat_buffer6: array<f32>;
+@group(0)
+@binding(7)
+var<storage, read_write> flat_buffer7: array<f32>;
+
+
 // Function to add one to a given value
 fn add_one(n: f32) -> f32 {
     return n + 1.0;
@@ -35,7 +50,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             flat_buffer0[index] = add_one(flat_buffer0[index]);
             flat_buffer1[index] = add_one(flat_buffer1[index]);
             flat_buffer2[index] = add_one(flat_buffer2[index]);
-            flat_buffer3[index] = add_one(flat_buffer3[index]); // we know this is gonna write out of bounds...
+            flat_buffer3[index] = add_one(flat_buffer3[index]);
+
+            flat_buffer4[index] = add_one(flat_buffer4[index]);
+            flat_buffer5[index] = add_one(flat_buffer5[index]);
+            flat_buffer6[index] = add_one(flat_buffer6[index]);
+            flat_buffer7[index] = add_one(flat_buffer7[index]);
 
         }
     }
