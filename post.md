@@ -343,7 +343,7 @@ Now after 100s of lines of boilerplate and setup we can finally `Encode` (i.e is
 
 Then we use that encoder to say, I'd like to do some buffer -> buffer copying please:
 ```rust
-/* snip ... */
+/* Snip ... */
  storage_buffers
         .iter()
         .zip(staging_buffers.iter())
@@ -422,7 +422,7 @@ if let Ok(Ok(())) = receiver.recv_async().await {
     log::error!("Failed to run compute on GPU!");
     None
 }
-/* snip... */
+/* Snip... */
     
 ```
 We can call `slice()` on our `wgpu:Buffer`s, then use `Read` to asynchronously move their data across a bounded channel (bounded because we want to stay listening until we've received _out_ of our pipe the same number of things we put _in_).
@@ -436,7 +436,7 @@ As you'd of noticed we peppered our app with a bunch of logging, so running this
  WARN  wgpu_prac_v2                > Supplied input is too large for a single staging buffer, splitting...
  DEBUG wgpu_prac_v2                > num_chunks: 8
 /*
-snipping
+Snipping
 */
  DEBUG wgpu_prac_v2                > creating staging buffer 7 of 8
  DEBUG wgpu_prac_v2                > creating staging buffer 8 of 8
@@ -446,7 +446,7 @@ snipping
  DEBUG wgpu_prac_v2                > creating storage buffer 2 of 8
  DEBUG wgpu_prac_v2                > creating storage buffer 3 of 8
 /*
-snipping
+Snipping
 */
  DEBUG wgpu_prac_v2                > 6 buffer is 134217728b
  DEBUG wgpu_prac_v2                > 7 buffer is 123480320b
@@ -495,7 +495,7 @@ _drumroll please_
  DEBUG wgpu_prac_v2                > num_chunks: 4
  DEBUG wgpu_prac_v2                > creating staging buffer 1 of 4
 /*
-snip
+Snip
 */ 
  DEBUG wgpu_prac_v2                > set_pipeline complete
  DEBUG wgpu_prac_v2                > set_bind_group complete
@@ -564,7 +564,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     v2_indices[global_id.x] = add_one(v2_indices[global_id.x]);
     v3_indices[global_id.x] = add_one(v3_indices[global_id.x]);
 
-/* snip */
+/* Snip */
 ```
 This is, well.. to put it _lightly_ disgusting, in the strictest definition of the _hard_ part of hard coding something this is _hard_ stuck like this forever, our shader is now bespoke coupled to our input -- but, for now, let's allow this and see if shit works:
 ```sh
@@ -589,11 +589,11 @@ Maybe it's a counting issue, how _high_ does our global_id.x go to? i.e how much
 ```
 And modify our shader to, instead of `add_one`ing everything we'll just write the length of the array as the gpu sees it:
 ```rust
-/* snip */
+/* Snip */
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let len = f32(arrayLength(&v_indices));
     v_indices[global_id.x] = len; 
-/* snip */
+/* Snip */
 
 ```
 but alas (Note I'm formatting these numbers to make them easier to read from now on)
@@ -787,7 +787,7 @@ We'll tweak our panicing printer to just bail at the first `1.0` (which we expec
 ```rust
     results.iter().enumerate().for_each(|(e, v)| {
         if *v == 1.0 {
-        /* snipping prints */
+        /* Snipping prints */
         }
 ```
 and, the results:
@@ -815,7 +815,73 @@ It seems we're in the home stretch now, we just need to
 - [] we need to ramp up to our _actual_ input size, the goal was 1GB of floats, strictly not less than that. 
 - [] we need to address how portable this is, there's a few magic numbers at the moment we're not sure will work across different hardware configurations so we need to sort out a way to handle that. (what if the GPU's max dispatch is wildly different etc...)
 
-# Addressing all the buffers:
+# Brute forcing our way to success.
+Ok, so at this point, we can up our data back to the target of 1GB's worth of 0.0f32s and, we can just do two _absolutely_ disgusting things like this:
+1. Go ham on bindings
+```rust
+@group(0)
+@binding(0)
+var<storage, read_write> flat_buffer0: array<f32>;
+@group(0)
+@binding(1)
+var<storage, read_write> flat_buffer1: array<f32>;
+@group(0)
+@binding(2)
+var<storage, read_write> flat_buffer2: array<f32>;
+@group(0)
+@binding(3)
+var<storage, read_write> flat_buffer3: array<f32>;
+
+@group(0)
+@binding(4)
+var<storage, read_write> flat_buffer4: array<f32>;
+@group(0)
+@binding(5)
+var<storage, read_write> flat_buffer5: array<f32>;
+@group(0)
+@binding(6)
+var<storage, read_write> flat_buffer6: array<f32>;
+@group(0)
+@binding(7)
+var<storage, read_write> flat_buffer7: array<f32>;
+
+```
+and, 2. Smush our existing index+offset loop like this
+```rust
+/* Snip */ 
+for (var i = 0u; i < OFFSET; i++) {
+        let index = base_index + i;
+        
+        if (index < arrayLength(&flat_buffer0)) {
+            flat_buffer0[index] = add_one(flat_buffer0[index]);
+            flat_buffer1[index] = add_one(flat_buffer1[index]);
+            flat_buffer2[index] = add_one(flat_buffer2[index]);
+            flat_buffer3[index] = add_one(flat_buffer3[index]);
+
+            flat_buffer4[index] = add_one(flat_buffer4[index]);
+            flat_buffer5[index] = add_one(flat_buffer5[index]);
+            flat_buffer6[index] = add_one(flat_buffer6[index]);
+            flat_buffer7[index] = add_one(flat_buffer7[index]);
+
+        }
+    }
+/* Snip */ 
+```
+
+Then for the first time (everytime?):
+```sh
+ DEBUG wgpu_prac_v2 > buffers created, submitting job to GPU
+ DEBUG wgpu_prac_v2 > Job submission complete.
+ DEBUG wgpu_prac_v2 > Getting results...
+ DEBUG wgpu_prac_v2 > TOTAL RUNTIME: 3507ms
+```
+
+... and if that solution wasn't so absolutely disgusting, we'd be done.
+But I am not sure I can sleep at night with this many hard-coded things, that'll defnitely not work on someone else's machine, and are in general this hyper-tailored.
+
+Surely it's possible to do _better_?
+
+# Addressing all the buffers, in a nicer fashion
 
 Allegedly (and [I found this](https://wgpu.rs/doc/wgpu/struct.Features.html#associatedconstant.STORAGE_RESOURCE_BINDING_ARRAY) by reading the wgpu sourcecode, not docs or GH issues, or tutorials, that is really the reason I sat down and begun cataloging all this...)
 
@@ -824,20 +890,21 @@ So let's try to use that and refactor our shader to support.
 Refactoring the way we ask for the `wgpu::Device` to request the `wgpu:Feature` we want to use:
 > From our `execute_gpu` function:
 ```rust
-/*snip*/
-let (device, queue) = adapter
+/*Snip*/
+    let (device, queue) = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY,
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                required_features: Features::STORAGE_RESOURCE_BINDING_ARRAY
+                    | Features::BUFFER_BINDING_ARRAY,
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
+                ..Default::default()
             },
             None,
         )
         .await
         .unwrap();
-/*snip*/
+/*Snip*/
 ```
 
 Then, according to the docs we can just declare our binding is an array of `T`, but it _looks like_ we need to declare said `T`, we'll not make a custom `T`, yet and just call the spade the spade it is.

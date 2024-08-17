@@ -40,13 +40,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let len = arrayLength(&flat_buffer0);
 
 
-// working on one-buffer
     // Loop over the OFFSET indices that this thread is responsible for
     for (var i = 0u; i < OFFSET; i++) {
         let index = base_index + i;
         
         if (index < arrayLength(&flat_buffer0)) {
-            // flat_buffer[index] = add_one(flat_buffer[index]);
             flat_buffer0[index] = add_one(flat_buffer0[index]);
             flat_buffer1[index] = add_one(flat_buffer1[index]);
             flat_buffer2[index] = add_one(flat_buffer2[index]);
