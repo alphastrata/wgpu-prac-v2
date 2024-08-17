@@ -20,14 +20,8 @@ pub async fn execute_gpu(numbers: &[f32]) -> Option<Vec<f32>> {
             &wgpu::DeviceDescriptor {
                 label: None,
                 required_features: 
-                // What features can we add?
-                Features::default(),
-                // Features::STORAGE_RESOURCE_BINDING_ARRAY
-                //     | Features::BUFFER_BINDING_ARRAY
-                //     | Features::UNIFORM_BUFFER_AND_STORAGE_TEXTURE_ARRAY_NON_UNIFORM_INDEXING,
-                // What limits can we uplevel to?
-                // required_limits: wgpu::Limits::downlevel_defaults(),
-                memory_hints: wgpu::MemoryHints::MemoryUsage,
+                Features::default(),              
+                memory_hints: wgpu::MemoryHints::Performance,
                 ..Default::default()
             },
             None,
