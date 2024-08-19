@@ -1,5 +1,5 @@
 {
-  description = "Rust dev shell for Bevy based on zero to nix rust dev flake";
+  description = "CUDA dev shell environment with Rust support";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -23,7 +23,10 @@
       ];
 
       forAllSystems = f: nixpkgs.lib.genAttrs allSystems (system: f {
-        pkgs = import nixpkgs { inherit overlays system; };
+        pkgs = import nixpkgs {
+          inherit overlays system;
+          config.allowUnfree = true;
+        };
       });
     in
     {
@@ -32,7 +35,7 @@
           packages = (with pkgs; [
             alsa-lib
             cargo-nextest
-                    lld
+            lld
             openssl
             pkg-config
             rustToolchain
@@ -41,26 +44,27 @@
             vulkan-loader
             vulkan-tools
             vulkan-validation-layers
-
-            python311
-            python311Packages.numpy
-            python311Packages.setuptools
-            python311Packages.wheel
-           
             xorg.libX11
             xorg.libXcursor
             xorg.libXi
             xorg.libXrandr
-          ]) ++ pkgs.lib.optionals pkgs.stdenv.isDarwin (with pkgs; [ libiconv ]);
+            pkgs.gcc11
+            cudatoolkit
+          ]) ++ pkgs.lib.optionals pkgs.stdenv.isDarwin (with pkgs; [
+            libiconv
+          ]);
 
           shellHook = ''
             export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath [
               pkgs.udev
               pkgs.vulkan-loader
               pkgs.openssl
-            
+              pkgs.cudatoolkit
             ]}"
-
+            export CUDA_PATH=${pkgs.cudatoolkit}
+            export PATH=${pkgs.gcc11}/bin:$PATH  # Prioritize GCC 11 in the PATH
+            export CC=${pkgs.gcc11}/bin/gcc
+            export CXX=${pkgs.gcc11}/bin/g++
             rustup default nightly
           '';
         };
