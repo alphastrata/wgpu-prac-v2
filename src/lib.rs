@@ -243,7 +243,6 @@ fn setup_binds(
 }
 
 pub async fn run() {
-    // let numbers = gigs_of_zeroed_f32s(0.50);
     let numbers = gigs_of_zeroed_f32s(1.0);
 
     assert!(numbers.iter().all(|n| *n == 0.0));
@@ -257,7 +256,6 @@ pub async fn run() {
 
     results.iter().enumerate().for_each(|(e, v)| {
         if *v == 0.0 {
-            // Add this check to avoid underflow when e is 0
             println!(
                 "Pre Panic @ idx-2: {}, val: {}",
                 format_large_number(e - 2),
