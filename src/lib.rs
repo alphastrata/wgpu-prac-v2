@@ -21,7 +21,9 @@ pub async fn execute_gpu(numbers: &[f32]) -> Option<Vec<f32>> {
             &wgpu::DeviceDescriptor {
                 label: None,
                 required_features: Features::STORAGE_RESOURCE_BINDING_ARRAY
+                    | Features::UNIFORM_BUFFER_AND_STORAGE_TEXTURE_ARRAY_NON_UNIFORM_INDEXING
                     | Features::BUFFER_BINDING_ARRAY,
+
                 memory_hints: wgpu::MemoryHints::Performance,
                 ..Default::default()
             },

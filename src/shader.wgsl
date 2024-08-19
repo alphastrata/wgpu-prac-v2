@@ -7,8 +7,9 @@ struct OurBuffer {
     inner: array<f32, BUFF_LENGTH>,
 }
 
+// NOTE: binding_array will not work on WebGPU or dawn, it's wgpu(naga) only.
 @group(0) @binding(0)
-var<storage, read_write> all_buffers: array<OurBuffer, NUM_BUFFERS>;
+var<storage, read_write> all_buffers: binding_array<array<f32, NUM_BUFFERS>>;
 
 
 @compute @workgroup_size(256, 1, 1)
@@ -22,7 +23,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let buffer_index = index / BUFF_LENGTH;
             let inner_index = index % BUFF_LENGTH;
 
-            all_buffers[buffer_index].inner[inner_index] = add_one(all_buffers[buffer_index].inner[inner_index]);
+            all_buffers[buffer_index][inner_index] = add_one(all_buffers[buffer_index][inner_index]);
         }
     }
 }
