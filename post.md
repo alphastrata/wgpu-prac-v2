@@ -881,6 +881,8 @@ But I am not sure I can sleep at night with this many hard-coded things, that'll
 
 Surely it's possible to do _better_?
 
+> A side note: this seems... slow, but creating pipelines is time consuming so, we should (according to all the videos, and tutorial content) reuse them... not sure how we do that yet.
+
 # Addressing all the buffers, in a nicer fashion
 
 Allegedly (and [I found this](https://wgpu.rs/doc/wgpu/struct.Features.html#associatedconstant.STORAGE_RESOURCE_BINDING_ARRAY) by reading the wgpu sourcecode, not docs or GH issues, or tutorials, that is really the reason I sat down and begun cataloging all this...)
@@ -1037,6 +1039,10 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
  TRACE wgpu_core::command::allocator > CommandAllocator::dispose encoders 0
 ```
 Well that didn't tell us much, other than `wgpu` would have trouble using libGL, but as we want vulkan anyway that's useless.
+
+The answer turns out to be that when using `array<T>` in custom `struct`s, the `array<T, N>` needs to be sized with `N`.
+
+This introduces another hardcoded const/value for us which sucks, but we'll worry about it later.:
 
 
 
