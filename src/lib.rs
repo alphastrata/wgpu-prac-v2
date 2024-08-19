@@ -1,6 +1,6 @@
 use consts::{MAX_DISPATCH_SIZE, RTX_TITAN_MAX_BUFFER_SIZE};
 use debug_helpers::run_cpu_sanity_check;
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, num::NonZero, sync::Arc};
 use wgpu::{util::DeviceExt, Features};
 
 pub mod consts;
@@ -22,7 +22,7 @@ pub async fn execute_gpu(numbers: &[f32]) -> Option<Vec<f32>> {
                 label: None,
                 required_features: Features::STORAGE_RESOURCE_BINDING_ARRAY
                     | Features::BUFFER_BINDING_ARRAY,
-                memory_hints: wgpu::MemoryHints::MemoryUsage,
+                memory_hints: wgpu::MemoryHints::Performance,
                 ..Default::default()
             },
             None,
@@ -219,7 +219,7 @@ fn setup_binds(
                 has_dynamic_offset: false,
                 min_binding_size: None,
             },
-            count: None,
+            count: Some(NonZero::new(1).unwrap()), // Increment this each time? ++1, or is it the index? idx/N?
         })
         .collect();
 
