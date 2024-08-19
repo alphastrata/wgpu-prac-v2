@@ -1,14 +1,15 @@
-struct OurBuffer {
-    inner: array<f32, 33554432>,
-}
-
-@group(0) @binding(0)
-var<storage, read_write> all_buffers: array<OurBuffer, 8>;
-
 const OFFSET: u32 = 1u << 8u;
 const BUFF_LENGTH: u32 = 1u << 25u;
 const NUM_BUFFERS: u32 = 8u;
 const TOTAL_SIZE: u32 = BUFF_LENGTH * NUM_BUFFERS;
+
+struct OurBuffer {
+    inner: array<f32, BUFF_LENGTH>,
+}
+
+@group(0) @binding(0)
+var<storage, read_write> all_buffers: array<OurBuffer, NUM_BUFFERS>;
+
 
 @compute @workgroup_size(256, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
