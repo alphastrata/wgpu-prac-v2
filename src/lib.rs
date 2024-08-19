@@ -1,6 +1,7 @@
-use consts::RTX_TITAN_MAX_BUFFER_SIZE;
-use std::{borrow::Cow, sync::Arc};
-use wgpu::util::DeviceExt;
+use consts::{MAX_DISPATCH_SIZE, RTX_TITAN_MAX_BUFFER_SIZE};
+use debug_helpers::run_cpu_sanity_check;
+use std::{borrow::Cow, num::NonZero, sync::Arc};
+use wgpu::{util::DeviceExt, Features};
 
 pub mod consts;
 pub mod data_utils;
@@ -8,26 +9,23 @@ pub mod debug_helpers;
 
 use data_utils::gigs_of_zeroed_f32s;
 
-const MAX_DISPATCH_SIZE: u32 = 65535;
-
 pub async fn execute_gpu(numbers: &[f32]) -> Option<Vec<f32>> {
-    // Instantiates instance of WebGPU
     let instance = wgpu::Instance::default();
 
-    // `request_adapter` instantiates the general connection to the GPU
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
         .await?;
 
-    // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
-    //  `features` being the available features.
     let (device, queue) = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
-                memory_hints: wgpu::MemoryHints::MemoryUsage,
+                required_features: Features::STORAGE_RESOURCE_BINDING_ARRAY
+                    | Features::UNIFORM_BUFFER_AND_STORAGE_TEXTURE_ARRAY_NON_UNIFORM_INDEXING
+                    | Features::BUFFER_BINDING_ARRAY,
+
+                memory_hints: wgpu::MemoryHints::Performance,
+                ..Default::default()
             },
             None,
         )
@@ -51,8 +49,8 @@ async fn execute_gpu_inner(
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: None,
-            timestamp_writes: None,
+            label: Some("compute pass descriptor"),
+            timestamp_writes: None, // We can use this with ComputePassTimestampWrites, let's find out how
         });
         cpass.set_pipeline(&compute_pipeline);
         log::debug!("set_pipeline complete");
@@ -64,18 +62,12 @@ async fn execute_gpu_inner(
     }
 
     // Assuming `storage_buffers` and `destination_buffers` are Vec<wgpu::Buffer> and have the same length
-    storage_buffers
-        .iter()
-        .zip(staging_buffers.iter())
-        .into_iter()
-        .for_each(|(storage_buffer, staging_buffer)| {
+    storage_buffers.iter().zip(staging_buffers.iter()).for_each(
+        |(storage_buffer, staging_buffer)| {
             let sb_size = storage_buffer.size();
             let stg_size = staging_buffer.size();
 
-            assert!(
-                (sb_size % wgpu::COPY_BUFFER_ALIGNMENT == 0
-                    && sb_size % wgpu::COPY_BUFFER_ALIGNMENT == 0)
-            );
+            assert!(sb_size % wgpu::COPY_BUFFER_ALIGNMENT == 0);
             assert_eq!(sb_size, stg_size);
 
             encoder.copy_buffer_to_buffer(
@@ -85,7 +77,8 @@ async fn execute_gpu_inner(
                 0,              // Destination offset
                 stg_size,
             );
-        });
+        },
+    );
 
     log::debug!("buffers created, submitting job to GPU");
 
@@ -117,13 +110,12 @@ async fn execute_gpu_inner(
         // Retrieve and process buffer data
         let data: Vec<f32> = buffer_slices
             .iter()
-            .map(|bs| {
+            .flat_map(|bs| {
                 let data = bs.get_mapped_range();
                 let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
                 drop(data); // Drop to free buffer before unmap
                 result
             })
-            .flatten()
             .collect();
 
         // Since buffer_slices was not moved, we can still access it here
@@ -145,7 +137,6 @@ fn setup(
     wgpu::BindGroup,
     wgpu::ComputePipeline,
 ) {
-    // Loads the shader from WGSL
     let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
@@ -153,7 +144,7 @@ fn setup(
 
     // Gets the size in bytes of the buffer.
     let input_size = std::mem::size_of_val(numbers) as wgpu::BufferAddress;
-    log::debug!("Size of input {}b", &input_size);
+    log::debug!("Size of input {}b", format_large_number(&input_size));
 
     // ------------------------- BUFFERS -------------------------
     // Instantiates buffer without data.
@@ -168,6 +159,7 @@ fn setup(
 
     // ------------------------- BIND THE BUFFERS -------------------------
     // A bind group defines how buffers are accessed by shaders.
+    //TODO: it's quite possible for the 'work' to NOT fit into a single 4 binds available to each one of our 0..n 'groups' so, this needs a refactor
     let (bind_group_layout, bind_group) = setup_binds(&storage_buffers, device);
 
     let compute_pipeline = setup_pipeline(device, bind_group_layout, cs_module);
@@ -190,15 +182,14 @@ fn setup_pipeline(
         push_constant_ranges: &[],
     });
 
-    let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Compute Pipeline"),
         layout: Some(&pipeline_layout),
         module: &cs_module,
         entry_point: "main",
         compilation_options: Default::default(),
         cache: None,
-    });
-    compute_pipeline
+    })
 }
 
 fn setup_binds(
@@ -209,7 +200,11 @@ fn setup_binds(
         .iter()
         .enumerate()
         .map(|(bind_idx, buffer)| {
-            log::debug!("{} buffer is {}b", bind_idx, buffer.size());
+            log::debug!(
+                "bind_idx:{} buffer is {}b",
+                bind_idx,
+                format_large_number(buffer.size())
+            );
             wgpu::BindGroupEntry {
                 binding: bind_idx as u32,
                 resource: buffer.as_entire_binding(),
@@ -218,17 +213,23 @@ fn setup_binds(
         .collect();
 
     let bind_group_layout_entries: Vec<wgpu::BindGroupLayoutEntry> = (0..storage_buffers.len())
-        .map(|idx| wgpu::BindGroupLayoutEntry {
-            binding: idx as u32,
+        .map(|bind_idx| wgpu::BindGroupLayoutEntry {
+            binding: bind_idx as u32,
             visibility: wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Storage { read_only: false },
                 has_dynamic_offset: false,
                 min_binding_size: None,
             },
-            count: None,
+            count: Some(NonZero::new(1).unwrap()), // Increment this each time? ++1, or is it the index? idx/N?
         })
         .collect();
+
+    log::debug!(
+        "created {} BindGroupEntries with {} corresponding BindGroupEntryLayouts.",
+        bind_group_entries.len(),
+        bind_group_layout_entries.len()
+    );
 
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Custom Storage Bind Group Layout"),
@@ -244,73 +245,66 @@ fn setup_binds(
 }
 
 pub async fn run() {
-    let numbers = gigs_of_zeroed_f32s(0.48);
-    // let numbers = gigs_of_zeroed_f32s(0.99);
+    let numbers = gigs_of_zeroed_f32s(1.0);
 
     assert!(numbers.iter().all(|n| *n == 0.0));
-    log::debug!("numbers.len() = {}", numbers.len());
+    log::debug!("numbers.len() = {}", format_large_number(numbers.len()));
 
     let t1 = std::time::Instant::now();
     let results = execute_gpu(&numbers).await.unwrap();
-    log::debug!(">RUNTIME: {}ms", t1.elapsed().as_millis());
+    log::debug!("GPU RUNTIME: {}ms", t1.elapsed().as_millis());
 
     assert_eq!(numbers.len(), results.len());
 
-    /*  NOTES:
-    So our 48% of 1GB worth of floats makes an array of f32 of length according to :
-        numbers.len() = 128,849,016           // CPU side, which is correct
-        arrayLength(v_indicies) =  33,554,432 // GPU side, which is NOT correct.
-
-    Perhaps more unusually, we strike out with 0s long long before that 33.5 million:
-        idx: 4,194,239= val:1
-        idx: 4,194,240= val:0 (we should be 1.0 up until 33.5 million...)
-        So this seems to be that the global_id.x never gets high enough
-
-    which is exactly right for 1/4th of our bindings.
-    Our global_id.x maxes out at = 4,194,239, which is starting to look familiar
-
-    If we add a const OFFSET of that 4_194_239 and try to do the add_one calls at evenly,
-    strode segments of the array we get 1.0s up to:
-        idx: 16,776,960, val:0.0
-    which is ~4x what we had before so that makes sense, but we're still a long way from
-    incrementing all the way up to 33.5 million, let alone 128.8 million.
-
-    What happens if we just keep adding more at the stride * 'n' ?
-
-    weirdly adding these you'd think may take us further, but it does not, we still tap out at=16_776_960:
-        v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 4u]);
-        v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 5u]);
-        v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 6u]);
-        v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 7u]);
-
-    So what gives? is this ACTUALLY the size limit on our buffer?
-
-    What happens if we go from the 0.48 to 0.99 in our gigs_of_zeroed_f32s, and keep the above, will there be more buffer for us to write to?
-        ERROR wgpu::backend::wgpu_core > Handling wgpu errors as fatal by default
-        thread 'main' panicked at /home/jer/.cargo/registry/src/index.crates.io-6f17d22bba15001f/wgpu-22.1.0/src/backend/wgpu_core.rs:3411:5:
-        wgpu error: Validation Error
-
-        Caused by:
-          In Device::create_bind_group_layout, label = 'Custom Storage Bind Group Layout'
-            Too many bindings of type StorageBuffers in Stage ShaderStages(COMPUTE), limit is 4, count was 8. Check the limit `max_storage_buffers_per_shader_stage` passed to `Adapter::request_device`
-
-    Ok so < 1/2 a GB is the max, which is weird because our wgpu::Limits report:
-         {...,  "max_storage_buffer_binding_size": 2147483648, ... } // 2.147GB
-
-
-    Well regardless, we'll have to refactor the binding part again to accomodate a max of 4 bindings per group, so if our data is bigger than those 4 bindings can hold, we'll need additional groups too :(
-
-
-
-    */
     results.iter().enumerate().for_each(|(e, v)| {
         if *v == 0.0 {
-            println!("idx: {}, val:{:#?}", e, v);
+            println!(
+                "Pre Panic @ idx-2: {}, val: {}",
+                format_large_number(e - 2),
+                format_large_number(results[e - 2])
+            );
+
+            println!(
+                "Pre Panic @ idx-1: {}, val: {}",
+                format_large_number(e - 1),
+                format_large_number(results[e - 1])
+            );
+            println!(
+                "Panic     @ idx  : {}, val: {}",
+                format_large_number(e),
+                format_large_number(*v)
+            );
             panic!()
         }
     });
-
     assert!(results.iter().all(|n| *n == 1.0));
+
+    let results2 = run_cpu_sanity_check(&numbers);
+    assert!(results2.iter().all(|n| *n == 1.0));
+}
+
+fn format_large_number<N: ToString>(num: N) -> String {
+    let num_str = num.to_string();
+    let num_digits = num_str.len();
+
+    if num_digits <= 3 {
+        return num_str;
+    }
+
+    let num_underscores = (num_digits - 1) / 3;
+
+    let capacity = num_digits + num_underscores;
+
+    let mut result = String::with_capacity(capacity);
+
+    for (i, c) in num_str.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push('_');
+        }
+        result.push(c);
+    }
+
+    result.chars().rev().collect()
 }
 
 pub fn calculate_chunks(numbers: &[f32], max_buffer_size: u64) -> Vec<&[f32]> {
@@ -332,9 +326,9 @@ fn create_storage_buffers(
             .iter()
             .enumerate()
             .map(|(e, seg)| {
-                log::debug!("creating storage buffer {} of {}", e + 1, chunks.len());
+                log::debug!("creating Storage Buffer {} of {}", e + 1, chunks.len());
 
-                let size = std::mem::size_of_val(seg) as u64;
+                let size = std::mem::size_of_val(*seg) as u64;
                 assert!(size % wgpu::COPY_BUFFER_ALIGNMENT == 0);
 
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -366,19 +360,17 @@ fn create_staging_buffers(device: &wgpu::Device, numbers: &[f32]) -> Vec<wgpu::B
 
     log::debug!("num_chunks: {}", chunks.len());
     (0..chunks.len())
-        .into_iter()
         .map(|e| {
             let size = std::mem::size_of_val(chunks[e]) as u64;
             assert!(size % wgpu::COPY_BUFFER_ALIGNMENT == 0);
             log::debug!("creating staging buffer {} of {}", e + 1, chunks.len());
-            let b = device.create_buffer(&wgpu::BufferDescriptor {
+
+            device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(&format!("staging buffer-{}", e)),
                 size,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
-            });
-
-            b
+            })
         })
         .collect()
 }

@@ -1,36 +1,34 @@
-@group(0)
-@binding(0)
-var<storage, read_write> v_indices: array<f32>;
+const OFFSET: u32 = 1u << 8u;
+const BUFF_LENGTH: u32 = 1u << 25u;
+const NUM_BUFFERS: u32 = 8u;
+const TOTAL_SIZE: u32 = BUFF_LENGTH * NUM_BUFFERS;
 
-fn add_one(n: f32) -> f32 {
-    return n + 1.0;
+struct OurBuffer {
+    inner: array<f32, BUFF_LENGTH>,
 }
 
+// NOTE: binding_array will not work on WebGPU or dawn, it's wgpu(naga) only.
+@group(0) @binding(0)
+var<storage, read_write> all_buffers: binding_array<array<f32, NUM_BUFFERS>>;
 
-const OFFSET:u32 = 4194240;
 
-@compute
-@workgroup_size(64)
+@compute @workgroup_size(256, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    // let len = f32(arrayLength(&v_indices));
-    // v_indices[global_id.x] = len; 33.5 Million...
+    let base_index = global_id.x * OFFSET;
 
-    // v_indices[global_id.x] = add_one(v_indices[global_id.x]); 0s until 4.1 million
+    for (var i = 0u; i < OFFSET; i++) {
+        let index = base_index + i;
 
-    // v_indices[global_id.x] = f32(global_id.x); // highest our threads go
+        if (index < TOTAL_SIZE) {
+            let buffer_index = index / BUFF_LENGTH;
+            let inner_index = index % BUFF_LENGTH;
 
-    // Base index using global_id.x
-    v_indices[global_id.x] = add_one(v_indices[global_id.x]);
-    v_indices[global_id.x + OFFSET] = add_one(v_indices[global_id.x + OFFSET]);
-    v_indices[global_id.x + OFFSET * 2u] = add_one(v_indices[global_id.x + OFFSET * 2u]);
-    v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 3u]);
-    // up to here takes us up to 16.7 million
+            all_buffers[buffer_index][inner_index] = add_one(all_buffers[buffer_index][inner_index]);
+        }
+    }
+}
 
-    
-    // adding these you'd think may take us further, but it does not, we still tap out at 
-    // 16_776_960
-    // v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 4u]);
-    // v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 5u]);
-    // v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 6u]);
-    // v_indices[global_id.x + OFFSET * 3u] = add_one(v_indices[global_id.x + OFFSET * 7u]);
+// Function to add one to a given value
+fn add_one(n: f32) -> f32 {
+    return n + 1.0;
 }
