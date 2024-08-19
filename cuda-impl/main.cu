@@ -9,7 +9,7 @@ __global__ void addOne(float *d_data, size_t size) {
 }
 
 int main() {
-    size_t size = 1 << 28;  // 1GB of f32s, 1GB / 4 = 268,435,456 elements
+    size_t size = 1 << 28;  // 1GB of f32s
     float *h_data = (float*)malloc(size * sizeof(float));
     float *d_data;
 

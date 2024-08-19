@@ -61,7 +61,11 @@
               pkgs.openssl
               pkgs.cudatoolkit
             ]}"
+
             export CUDA_PATH=${pkgs.cudatoolkit}
+            export LIBRARY_PATH=$CUDA_PATH/lib:$LIBRARY_PATH
+            export LD_LIBRARY_PATH=$CUDA_PATH/lib:$LD_LIBRARY_PATH
+           
             export PATH=${pkgs.gcc11}/bin:$PATH  # Prioritize GCC 11 in the PATH
             export CC=${pkgs.gcc11}/bin/gcc
             export CXX=${pkgs.gcc11}/bin/g++
